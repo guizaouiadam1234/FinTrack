@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy import case, func
-from pydantic import BaseModel
-from datetime import datetime, timedelta
+from pydantic import BaseModel, ConfigDict
+from datetime import datetime, timedelta, timezone
 
 from app.database import get_db
 from app.models.transaction import Transaction
@@ -40,8 +40,7 @@ class RecentTransactionItem(BaseModel):
     category: str | None = None
     date: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # --- Routes ---
 @router.post("/", status_code=status.HTTP_201_CREATED)
@@ -52,7 +51,7 @@ def create_transaction(data: TransactionCreate, db: Session = Depends(get_db), c
         amount=data.amount,
         type=data.type,
         category=data.category,
-        date=data.date or datetime.utcnow()
+        date=data.date or datetime.now(timezone.utc)
     )
     db.add(transaction)
     db.commit()
@@ -84,13 +83,13 @@ def get_dashboard_summary(
         )
     ).filter(Transaction.user_id == current_user.id).scalar()
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     if start_date is None or end_date is None:
-        month_start = datetime(now.year, now.month, 1)
+        month_start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
         if now.month == 12:
-            month_end = datetime(now.year + 1, 1, 1) - timedelta(microseconds=1)
+            month_end = datetime(now.year + 1, 1, 1, tzinfo=timezone.utc) - timedelta(microseconds=1)
         else:
-            month_end = datetime(now.year, now.month + 1, 1) - timedelta(microseconds=1)
+            month_end = datetime(now.year, now.month + 1, 1, tzinfo=timezone.utc) - timedelta(microseconds=1)
     else:
         month_start = start_date
         month_end = end_date
@@ -140,6 +139,10 @@ def get_recent_transactions(
         Transaction.id.desc(),
     ).limit(safe_limit).all()
 
+@router.get("/sorted")
+def get_sorted_transactions(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return db.query(Transaction).filter(Transaction.user_id == current_user.id).order_by(Transaction.date.desc()).all()
+
 @router.get("/{transaction_id}")
 def get_transaction(transaction_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     transaction = db.query(Transaction).filter(Transaction.id == transaction_id, Transaction.user_id == current_user.id).first()
@@ -165,7 +168,3 @@ def delete_transaction(transaction_id: int, db: Session = Depends(get_db), curre
         raise HTTPException(status_code=404, detail="Transaction not found")
     db.delete(transaction)
     db.commit()
-
-@router.get("/sorted")
-def get_sorted_transactions(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    return db.query(Transaction).filter(Transaction.user_id == current_user.id).order_by(Transaction.date.desc()).all()
