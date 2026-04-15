@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from typing import List
+from sqlalchemy import case, func
 from pydantic import BaseModel
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from app.database import get_db
 from app.models.transaction import Transaction
@@ -26,6 +26,23 @@ class TransactionUpdate(BaseModel):
     category: str | None = None
     date: datetime | None = None
 
+class SummaryResponse(BaseModel):
+    total_balance: float
+    monthly_income: float
+    monthly_expenses: float
+    transaction_count: int
+
+class RecentTransactionItem(BaseModel):
+    id: int
+    title: str
+    amount: float
+    type: str
+    category: str | None = None
+    date: datetime
+
+    class Config:
+        from_attributes = True
+
 # --- Routes ---
 @router.post("/", status_code=status.HTTP_201_CREATED)
 def create_transaction(data: TransactionCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
@@ -45,6 +62,83 @@ def create_transaction(data: TransactionCreate, db: Session = Depends(get_db), c
 @router.get("/")
 def get_transactions(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     return db.query(Transaction).filter(Transaction.user_id == current_user.id).all()
+
+@router.get("/summary", response_model=SummaryResponse)
+def get_dashboard_summary(
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    total_income = db.query(
+        func.coalesce(
+            func.sum(case((Transaction.type == "income", Transaction.amount), else_=0.0)),
+            0.0,
+        )
+    ).filter(Transaction.user_id == current_user.id).scalar()
+
+    total_expenses = db.query(
+        func.coalesce(
+            func.sum(case((Transaction.type == "expense", Transaction.amount), else_=0.0)),
+            0.0,
+        )
+    ).filter(Transaction.user_id == current_user.id).scalar()
+
+    now = datetime.utcnow()
+    if start_date is None or end_date is None:
+        month_start = datetime(now.year, now.month, 1)
+        if now.month == 12:
+            month_end = datetime(now.year + 1, 1, 1) - timedelta(microseconds=1)
+        else:
+            month_end = datetime(now.year, now.month + 1, 1) - timedelta(microseconds=1)
+    else:
+        month_start = start_date
+        month_end = end_date
+
+    monthly_income = db.query(
+        func.coalesce(
+            func.sum(case((Transaction.type == "income", Transaction.amount), else_=0.0)),
+            0.0,
+        )
+    ).filter(
+        Transaction.user_id == current_user.id,
+        Transaction.date >= month_start,
+        Transaction.date <= month_end,
+    ).scalar()
+
+    monthly_expenses = db.query(
+        func.coalesce(
+            func.sum(case((Transaction.type == "expense", Transaction.amount), else_=0.0)),
+            0.0,
+        )
+    ).filter(
+        Transaction.user_id == current_user.id,
+        Transaction.date >= month_start,
+        Transaction.date <= month_end,
+    ).scalar()
+
+    transaction_count = db.query(func.count(Transaction.id)).filter(Transaction.user_id == current_user.id).scalar()
+
+    return SummaryResponse(
+        total_balance=float(total_income - total_expenses),
+        monthly_income=float(monthly_income),
+        monthly_expenses=float(monthly_expenses),
+        transaction_count=int(transaction_count or 0),
+    )
+
+@router.get("/recent", response_model=list[RecentTransactionItem])
+def get_recent_transactions(
+    limit: int = 20,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    safe_limit = min(max(limit, 1), 100)
+    return db.query(Transaction).filter(
+        Transaction.user_id == current_user.id
+    ).order_by(
+        Transaction.date.desc(),
+        Transaction.id.desc(),
+    ).limit(safe_limit).all()
 
 @router.get("/{transaction_id}")
 def get_transaction(transaction_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
@@ -71,3 +165,7 @@ def delete_transaction(transaction_id: int, db: Session = Depends(get_db), curre
         raise HTTPException(status_code=404, detail="Transaction not found")
     db.delete(transaction)
     db.commit()
+
+@router.get("/sorted")
+def get_sorted_transactions(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return db.query(Transaction).filter(Transaction.user_id == current_user.id).order_by(Transaction.date.desc()).all()
