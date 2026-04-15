@@ -1,0 +1,10 @@
+# Root-level dependencies/build artifacts
+node_modules/
+
+# Root-level package manager files (not used for this repo structure)
+package.json
+package-lock.json
+
+# OS/editor files
+.DS_Store
+Thumbs.db
