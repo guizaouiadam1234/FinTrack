@@ -52,5 +52,22 @@ export const createTransaction = async (payload) => {
   }
 }
 
+export const updateTransaction = async (transactionId, payload) => {
+  try {
+    const response = await api.put(`/transactions/${transactionId}`, payload)
+    return response.data
+  } catch (error) {
+    throw new Error(getApiErrorMessage(error, 'Unable to update transaction.'))
+  }
+}
+
+export const deleteTransaction = async (transactionId) => {
+  try {
+    await api.delete(`/transactions/${transactionId}`)
+  } catch (error) {
+    throw new Error(getApiErrorMessage(error, 'Unable to delete transaction.'))
+  }
+}
+
 
 export default api;

@@ -6,13 +6,17 @@ const {
   logoutMock,
   getDashboardSummaryMock,
   getRecentTransactionsMock,
-  createTransactionMock
+  createTransactionMock,
+  updateTransactionMock,
+  deleteTransactionMock
 } = vi.hoisted(() => ({
   pushMock: vi.fn(),
   logoutMock: vi.fn(),
   getDashboardSummaryMock: vi.fn(),
   getRecentTransactionsMock: vi.fn(),
-  createTransactionMock: vi.fn()
+  createTransactionMock: vi.fn(),
+  updateTransactionMock: vi.fn(),
+  deleteTransactionMock: vi.fn()
 }))
 
 vi.mock('vue-router', () => ({
@@ -28,7 +32,9 @@ vi.mock('../../router/auth', () => ({
 vi.mock('../../services/api', () => ({
   getDashboardSummary: getDashboardSummaryMock,
   getRecentTransactions: getRecentTransactionsMock,
-  createTransaction: createTransactionMock
+  createTransaction: createTransactionMock,
+  updateTransaction: updateTransactionMock,
+  deleteTransaction: deleteTransactionMock
 }))
 
 import DashboardView from '../DashboardView.vue'
@@ -58,10 +64,14 @@ describe('DashboardView', () => {
     getDashboardSummaryMock.mockReset()
     getRecentTransactionsMock.mockReset()
     createTransactionMock.mockReset()
+    updateTransactionMock.mockReset()
+    deleteTransactionMock.mockReset()
 
     getDashboardSummaryMock.mockResolvedValue(summaryFixture)
     getRecentTransactionsMock.mockResolvedValue(recentFixture)
     createTransactionMock.mockResolvedValue({ id: 2 })
+    updateTransactionMock.mockResolvedValue({ id: 1 })
+    deleteTransactionMock.mockResolvedValue(undefined)
   })
 
   it('loads summary and recent transactions on mount', async () => {

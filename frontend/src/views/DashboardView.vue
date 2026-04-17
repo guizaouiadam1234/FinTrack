@@ -2,7 +2,10 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { authStore } from '../router/auth'
-import { createTransaction, getDashboardSummary, getRecentTransactions } from '../services/api'
+import { createTransaction, deleteTransaction, getDashboardSummary, getRecentTransactions, updateTransaction } from '../services/api'
+import DashboardSummaryCards from '../components/DashboardSummaryCards.vue'
+import TransactionEntryForm from '../components/TransactionEntryForm.vue'
+import TransactionListPanel from '../components/TransactionListPanel.vue'
 
 const router = useRouter()
 
@@ -10,6 +13,19 @@ const loading = ref(true)
 const errorMessage = ref('')
 const createErrorMessage = ref('')
 const isCreating = ref(false)
+const rowActionErrorMessage = ref('')
+const actionMenuOpenId = ref(null)
+
+const editingTransaction = ref(null)
+const isSavingEdit = ref(false)
+const editForm = ref({
+	title: '',
+	amount: '',
+	type: 'expense',
+	category: '',
+	date: ''
+})
+const editErrorMessage = ref('')
 
 const summary = ref({
 	total_balance: 0,
@@ -34,10 +50,6 @@ const todayLabel = computed(() => {
 	}).format(new Date())
 })
 
-const formattedBalance = computed(() => formatCurrency(summary.value.total_balance))
-const formattedMonthlyIncome = computed(() => formatCurrency(summary.value.monthly_income))
-const formattedMonthlyExpenses = computed(() => formatCurrency(summary.value.monthly_expenses))
-
 const monthWindow = computed(() => {
 	const now = new Date()
 	const start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0)
@@ -49,36 +61,6 @@ const monthWindow = computed(() => {
 	}
 })
 
-const formatCurrency = (amount) => {
-	const value = Number.isFinite(Number(amount)) ? Number(amount) : 0
-	return new Intl.NumberFormat('en-US', {
-		style: 'currency',
-		currency: 'USD',
-		minimumFractionDigits: 2,
-		maximumFractionDigits: 2
-	}).format(value)
-}
-
-const formatDate = (dateValue) => {
-	if (!dateValue) return 'No date'
-	const parsedDate = new Date(dateValue)
-	if (Number.isNaN(parsedDate.getTime())) return 'Invalid date'
-
-	return new Intl.DateTimeFormat('en-US', {
-		month: 'short',
-		day: 'numeric',
-		year: 'numeric'
-	}).format(parsedDate)
-}
-
-const amountClass = (type) => {
-	return type === 'income' ? 'text-cyan-300' : 'text-blue-100'
-}
-
-const amountPrefix = (type) => {
-	return type === 'income' ? '+' : '-'
-}
-
 const resetTransactionForm = () => {
 	newTransaction.value = {
 		title: '',
@@ -86,6 +68,90 @@ const resetTransactionForm = () => {
 		type: 'expense',
 		category: '',
 		date: new Date().toISOString().slice(0, 10)
+	}
+}
+
+const toDateInput = (dateValue) => {
+	if (!dateValue) return ''
+	const date = new Date(dateValue)
+	if (Number.isNaN(date.getTime())) return ''
+	return date.toISOString().slice(0, 10)
+}
+
+const toggleActionMenu = (transactionId) => {
+	actionMenuOpenId.value = actionMenuOpenId.value === transactionId ? null : transactionId
+}
+
+const updateNewTransactionForm = (nextFormState) => {
+	newTransaction.value = nextFormState
+}
+
+const updateEditFormState = (nextEditFormState) => {
+	editForm.value = nextEditFormState
+}
+
+const closeEditModal = () => {
+	editingTransaction.value = null
+	editErrorMessage.value = ''
+}
+
+const openEditModal = (transaction) => {
+	actionMenuOpenId.value = null
+	rowActionErrorMessage.value = ''
+	editingTransaction.value = transaction
+	editForm.value = {
+		title: transaction.title || '',
+		amount: String(transaction.amount ?? ''),
+		type: transaction.type || 'expense',
+		category: transaction.category || '',
+		date: toDateInput(transaction.date)
+	}
+}
+
+const handleDeleteTransaction = async (transaction) => {
+	actionMenuOpenId.value = null
+	rowActionErrorMessage.value = ''
+	const confirmed = window.confirm(`Delete transaction \"${transaction.title}\"?`)
+	if (!confirmed) return
+
+	try {
+		await deleteTransaction(transaction.id)
+		await loadDashboardData()
+	} catch (error) {
+		rowActionErrorMessage.value = error?.message || 'Unable to delete transaction right now.'
+	}
+}
+
+const handleUpdateTransaction = async () => {
+	editErrorMessage.value = ''
+	if (!editingTransaction.value) return
+
+	const amountValue = Number(editForm.value.amount)
+	if (!editForm.value.title.trim()) {
+		editErrorMessage.value = 'Title is required.'
+		return
+	}
+	if (!Number.isFinite(amountValue) || amountValue <= 0) {
+		editErrorMessage.value = 'Amount must be greater than 0.'
+		return
+	}
+
+	isSavingEdit.value = true
+	try {
+		await updateTransaction(editingTransaction.value.id, {
+			title: editForm.value.title.trim(),
+			amount: amountValue,
+			type: editForm.value.type,
+			category: editForm.value.category.trim() || null,
+			date: editForm.value.date ? new Date(`${editForm.value.date}T12:00:00`).toISOString() : null
+		})
+
+		closeEditModal()
+		await loadDashboardData()
+	} catch (error) {
+		editErrorMessage.value = error?.message || 'Unable to update transaction right now.'
+	} finally {
+		isSavingEdit.value = false
 	}
 }
 
@@ -184,149 +250,35 @@ onMounted(() => {
 		</header>
 
 		<main class="relative z-10 mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-			<section class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-				<article class="rounded-2xl border border-blue-300/20 bg-[#0a142db8] p-5 shadow-[0_18px_48px_rgba(0,0,0,0.45)] backdrop-blur-sm">
-					<p class="text-xs uppercase tracking-[0.14em] text-blue-200/70">Total Balance</p>
-					<p class="mt-2 text-3xl font-semibold tracking-tight" :class="summary.total_balance >= 0 ? 'text-cyan-300' : 'text-blue-100'">
-						{{ formattedBalance }}
-					</p>
-					<p class="mt-2 text-xs text-blue-200/60">All-time across your transactions</p>
-				</article>
-
-				<article class="rounded-2xl border border-blue-300/20 bg-[#0a142db8] p-5 shadow-[0_18px_48px_rgba(0,0,0,0.45)] backdrop-blur-sm">
-					<p class="text-xs uppercase tracking-[0.14em] text-blue-200/70">Monthly Income</p>
-					<p class="mt-2 text-3xl font-semibold tracking-tight text-cyan-300">{{ formattedMonthlyIncome }}</p>
-					<p class="mt-2 text-xs text-blue-200/60">Current month (local time)</p>
-				</article>
-
-				<article class="rounded-2xl border border-blue-300/20 bg-[#0a142db8] p-5 shadow-[0_18px_48px_rgba(0,0,0,0.45)] backdrop-blur-sm sm:col-span-2 lg:col-span-1">
-					<p class="text-xs uppercase tracking-[0.14em] text-blue-200/70">Monthly Expenses</p>
-					<p class="mt-2 text-3xl font-semibold tracking-tight text-blue-100">{{ formattedMonthlyExpenses }}</p>
-					<p class="mt-2 text-xs text-blue-200/60">{{ summary.transaction_count }} total transactions</p>
-				</article>
-			</section>
+			<DashboardSummaryCards :summary="summary" />
 
 			<section class="mt-6 grid gap-6 lg:grid-cols-[360px_1fr]">
-				<article class="rounded-2xl border border-blue-300/20 bg-[#0a142db8] p-5 shadow-[0_18px_48px_rgba(0,0,0,0.45)] backdrop-blur-sm sm:p-6">
-					<h2 class="text-lg font-semibold tracking-wide text-blue-50">Add Transaction</h2>
-					<p class="mt-1 text-xs text-blue-200/70">Create income or expense and refresh the dashboard instantly.</p>
+				<TransactionEntryForm
+					:form="newTransaction"
+					:error-message="createErrorMessage"
+					:is-creating="isCreating"
+					@update:form="updateNewTransactionForm"
+					@submit="handleCreateTransaction"
+				/>
 
-					<form class="mt-4 space-y-3" @submit.prevent="handleCreateTransaction">
-						<div>
-							<label for="title" class="mb-1 block text-xs uppercase tracking-[0.12em] text-blue-200/80">Title</label>
-							<input
-								id="title"
-								v-model="newTransaction.title"
-								type="text"
-								placeholder="Salary, groceries, rent..."
-								class="w-full rounded-xl border border-blue-300/25 bg-blue-950/40 px-3 py-2 text-sm text-blue-50 outline-none transition placeholder:text-blue-300/40 focus:border-blue-200/60 focus:ring-4 focus:ring-blue-400/20"
-								required
-							/>
-						</div>
-
-						<div class="grid grid-cols-2 gap-3">
-							<div>
-								<label for="amount" class="mb-1 block text-xs uppercase tracking-[0.12em] text-blue-200/80">Amount</label>
-								<input
-									id="amount"
-									v-model="newTransaction.amount"
-									type="number"
-									step="0.01"
-									min="0.01"
-									placeholder="0.00"
-									class="w-full rounded-xl border border-blue-300/25 bg-blue-950/40 px-3 py-2 text-sm text-blue-50 outline-none transition placeholder:text-blue-300/40 focus:border-blue-200/60 focus:ring-4 focus:ring-blue-400/20"
-									required
-								/>
-							</div>
-
-							<div>
-								<label for="type" class="mb-1 block text-xs uppercase tracking-[0.12em] text-blue-200/80">Type</label>
-								<select
-									id="type"
-									v-model="newTransaction.type"
-									class="w-full rounded-xl border border-blue-300/25 bg-blue-950/40 px-3 py-2 text-sm text-blue-50 outline-none transition focus:border-blue-200/60 focus:ring-4 focus:ring-blue-400/20"
-								>
-									<option value="expense">Expense</option>
-									<option value="income">Income</option>
-								</select>
-							</div>
-						</div>
-
-						<div class="grid grid-cols-2 gap-3">
-							<div>
-								<label for="category" class="mb-1 block text-xs uppercase tracking-[0.12em] text-blue-200/80">Category</label>
-								<input
-									id="category"
-									v-model="newTransaction.category"
-									type="text"
-									placeholder="Optional"
-									class="w-full rounded-xl border border-blue-300/25 bg-blue-950/40 px-3 py-2 text-sm text-blue-50 outline-none transition placeholder:text-blue-300/40 focus:border-blue-200/60 focus:ring-4 focus:ring-blue-400/20"
-								/>
-							</div>
-
-							<div>
-								<label for="date" class="mb-1 block text-xs uppercase tracking-[0.12em] text-blue-200/80">Date</label>
-								<input
-									id="date"
-									v-model="newTransaction.date"
-									type="date"
-									class="w-full rounded-xl border border-blue-300/25 bg-blue-950/40 px-3 py-2 text-sm text-blue-50 outline-none transition focus:border-blue-200/60 focus:ring-4 focus:ring-blue-400/20"
-								/>
-							</div>
-						</div>
-
-						<p v-if="createErrorMessage" class="rounded-lg border border-blue-300/30 bg-blue-900/35 px-3 py-2 text-sm text-blue-200">
-							{{ createErrorMessage }}
-						</p>
-
-						<button
-							type="submit"
-							:disabled="isCreating"
-							class="w-full rounded-xl bg-gradient-to-r from-blue-600 to-sky-400 px-4 py-2.5 text-xs font-semibold uppercase tracking-[0.12em] text-white transition hover:-translate-y-0.5 hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-70"
-						>
-							{{ isCreating ? 'Saving...' : 'Add Transaction' }}
-						</button>
-					</form>
-				</article>
-
-				<article class="rounded-2xl border border-blue-300/20 bg-[#0a142db8] p-5 shadow-[0_18px_48px_rgba(0,0,0,0.45)] backdrop-blur-sm sm:p-6">
-				<div class="flex flex-wrap items-center justify-between gap-3">
-					<h2 class="text-lg font-semibold tracking-wide text-blue-50">Recent Transactions</h2>
-					<button
-						type="button"
-						@click="loadDashboardData"
-						class="rounded-lg border border-blue-300/35 bg-blue-500/15 px-3 py-1.5 text-xs font-medium uppercase tracking-[0.12em] text-blue-100 transition hover:bg-blue-500/30"
-					>
-						Refresh
-					</button>
-				</div>
-
-				<p v-if="errorMessage" class="mt-4 rounded-lg border border-blue-300/30 bg-blue-900/35 px-3 py-2 text-sm text-blue-200">
-					{{ errorMessage }}
-				</p>
-
-				<div v-if="loading" class="mt-4 space-y-2">
-					<div v-for="index in 6" :key="index" class="h-14 animate-pulse rounded-xl bg-blue-400/10"></div>
-				</div>
-
-				<ul v-else-if="recentTransactions.length > 0" class="mt-4 divide-y divide-blue-300/12">
-					<li v-for="transaction in recentTransactions" :key="transaction.id" class="flex items-center justify-between gap-3 py-3">
-						<div>
-							<p class="text-sm font-medium text-blue-50">{{ transaction.title }}</p>
-							<p class="text-xs text-blue-200/65">
-								{{ transaction.category || 'Uncategorized' }} • {{ formatDate(transaction.date) }}
-							</p>
-						</div>
-						<p class="text-sm font-semibold" :class="amountClass(transaction.type)">
-							{{ amountPrefix(transaction.type) }}{{ formatCurrency(transaction.amount) }}
-						</p>
-					</li>
-				</ul>
-
-				<p v-else class="mt-4 rounded-lg border border-blue-300/20 bg-blue-900/20 px-3 py-2 text-sm text-blue-200/80">
-					No transactions yet. Add your first income or expense to populate this dashboard.
-				</p>
-				</article>
+				<TransactionListPanel
+					:loading="loading"
+					:error-message="errorMessage"
+					:row-action-error-message="rowActionErrorMessage"
+					:transactions="recentTransactions"
+					:action-menu-open-id="actionMenuOpenId"
+					:editing-transaction="editingTransaction"
+					:edit-form="editForm"
+					:is-saving-edit="isSavingEdit"
+					:edit-error-message="editErrorMessage"
+					@refresh="loadDashboardData"
+					@toggle-action-menu="toggleActionMenu"
+					@open-edit-modal="openEditModal"
+					@delete-transaction="handleDeleteTransaction"
+					@close-edit-modal="closeEditModal"
+					@update:edit-form="updateEditFormState"
+					@submit-edit="handleUpdateTransaction"
+				/>
 			</section>
 		</main>
 	</div>
